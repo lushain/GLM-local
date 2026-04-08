@@ -3,8 +3,7 @@ import sys
 import os
 import logging
 import torch
-from transformers import AutoProcessor, AutoModelForVision2Seq
-from PIL import Image
+from transformers import AutoProcessor, AutoModelForImageTextToText
 
 # For PDF support
 try:
@@ -24,6 +23,7 @@ def load_images_from_pdf(pdf_path):
         logging.error("PyMuPDF is required for PDF support. Install it with: pip install pymupdf")
         sys.exit(1)
 
+    from PIL import Image
     doc = fitz.open(pdf_path)
     images = []
     for page_num in range(len(doc)):
@@ -36,13 +36,39 @@ def load_images_from_pdf(pdf_path):
     return images
 
 
-def run_ocr_on_image(model, processor, image, device, prompt="Text Recognition:"):
-    """Run GLM-OCR inference on a single PIL Image."""
-    inputs = processor(images=image, text=prompt, return_tensors="pt").to(device)
+def run_ocr_on_image(model, processor, image, prompt="Text Recognition:"):
+    """Run GLM-OCR inference on a single PIL Image using the official chat template format."""
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "image"},
+                {"type": "text", "text": prompt},
+            ],
+        }
+    ]
+
+    inputs = processor.apply_chat_template(
+        messages,
+        tokenize=True,
+        add_generation_prompt=True,
+        return_dict=True,
+        return_tensors="pt",
+        images=[image],
+    ).to(model.device)
+
+    # Some models include token_type_ids that aren't needed
+    inputs.pop("token_type_ids", None)
+
     with torch.no_grad():
-        output = model.generate(**inputs, max_new_tokens=4096)
-    result = processor.decode(output[0], skip_special_tokens=True)
-    return result
+        generated_ids = model.generate(**inputs, max_new_tokens=8192)
+
+    # Decode only the generated tokens (skip the input prompt tokens)
+    output_text = processor.decode(
+        generated_ids[0][inputs["input_ids"].shape[1]:],
+        skip_special_tokens=False,
+    )
+    return output_text
 
 
 def main():
@@ -73,10 +99,10 @@ def main():
     # --- Model Loading ---
     logging.info(f"Loading model: {MODEL_ID} (first run will download ~2GB of weights)...")
     processor = AutoProcessor.from_pretrained(MODEL_ID, trust_remote_code=True)
-    model = AutoModelForVision2Seq.from_pretrained(
+    model = AutoModelForImageTextToText.from_pretrained(
         MODEL_ID,
-        torch_dtype=torch.float16 if device == "cuda" else torch.float32,
-        device_map="auto" if device == "cuda" else None,
+        torch_dtype="auto",
+        device_map="auto",
         trust_remote_code=True,
     )
     logging.info("Model loaded successfully!")
@@ -91,13 +117,14 @@ def main():
         logging.info(f"Found {len(pages)} page(s) in PDF.")
         for page_num, page_img in pages:
             logging.info(f"  Running OCR on page {page_num}/{len(pages)}...")
-            text = run_ocr_on_image(model, processor, page_img, device, args.prompt)
+            text = run_ocr_on_image(model, processor, page_img, args.prompt)
             all_results.append(f"## Page {page_num}\n\n{text}")
     else:
         # Treat as a single image
+        from PIL import Image
         logging.info(f"Processing image: {args.document_path}")
         image = Image.open(args.document_path).convert("RGB")
-        text = run_ocr_on_image(model, processor, image, device, args.prompt)
+        text = run_ocr_on_image(model, processor, image, args.prompt)
         all_results.append(text)
 
     # --- Output ---

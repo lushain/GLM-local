@@ -2,6 +2,7 @@ import argparse
 import sys
 import os
 import logging
+import tempfile
 import torch
 from transformers import AutoProcessor, AutoModelForImageTextToText
 
@@ -16,33 +17,39 @@ logging.basicConfig(level=logging.INFO)
 
 MODEL_ID = "zai-org/GLM-OCR"
 
+# Temp directory for saving page images from PDFs
+TEMP_DIR = tempfile.mkdtemp(prefix="glm_ocr_")
+
 
 def load_images_from_pdf(pdf_path):
-    """Convert each page of a PDF into a PIL Image."""
+    """Convert each page of a PDF into a PIL Image and save as temp file."""
     if not PDF_SUPPORT:
         logging.error("PyMuPDF is required for PDF support. Install it with: pip install pymupdf")
         sys.exit(1)
 
     from PIL import Image
     doc = fitz.open(pdf_path)
-    images = []
+    pages = []
     for page_num in range(len(doc)):
         page = doc[page_num]
         # Render page at 300 DPI for high quality OCR
         pix = page.get_pixmap(dpi=300)
         img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
-        images.append((page_num + 1, img))
+        # Save to temp file so the processor can load it via URL/path
+        temp_path = os.path.join(TEMP_DIR, f"page_{page_num + 1}.png")
+        img.save(temp_path)
+        pages.append((page_num + 1, temp_path))
     doc.close()
-    return images
+    return pages
 
 
-def run_ocr_on_image(model, processor, image, prompt="Text Recognition:"):
-    """Run GLM-OCR inference on a single PIL Image using the official chat template format."""
+def run_ocr_on_path(model, processor, image_path, prompt="Text Recognition:"):
+    """Run GLM-OCR inference on an image file, matching the official HuggingFace example."""
     messages = [
         {
             "role": "user",
             "content": [
-                {"type": "image"},
+                {"type": "image", "url": image_path},
                 {"type": "text", "text": prompt},
             ],
         }
@@ -54,7 +61,6 @@ def run_ocr_on_image(model, processor, image, prompt="Text Recognition:"):
         add_generation_prompt=True,
         return_dict=True,
         return_tensors="pt",
-        images=[image],
     ).to(model.device)
 
     # Some models include token_type_ids that aren't needed
@@ -115,16 +121,15 @@ def main():
         logging.info(f"Processing PDF: {args.document_path}")
         pages = load_images_from_pdf(args.document_path)
         logging.info(f"Found {len(pages)} page(s) in PDF.")
-        for page_num, page_img in pages:
+        for page_num, page_path in pages:
             logging.info(f"  Running OCR on page {page_num}/{len(pages)}...")
-            text = run_ocr_on_image(model, processor, page_img, args.prompt)
+            text = run_ocr_on_path(model, processor, page_path, args.prompt)
             all_results.append(f"## Page {page_num}\n\n{text}")
     else:
-        # Treat as a single image
-        from PIL import Image
+        # Treat as a single image file — pass path directly
         logging.info(f"Processing image: {args.document_path}")
-        image = Image.open(args.document_path).convert("RGB")
-        text = run_ocr_on_image(model, processor, image, args.prompt)
+        image_path = os.path.abspath(args.document_path)
+        text = run_ocr_on_path(model, processor, image_path, args.prompt)
         all_results.append(text)
 
     # --- Output ---

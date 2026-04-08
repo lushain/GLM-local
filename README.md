@@ -38,8 +38,12 @@ Install the official package with self-hosted layout features enabled. This pull
 pip install "glmocr[selfhosted]"
 ```
 
-### 5. Run the Inference Script
-We've set up the script to automatically default to reading `testDocs/dixon51.pdf` and outputting the Markdown results.
+### 5. Run the Local Backend Server (If Required)
+Depending on your exact system setup, the SDK may expect the local inference server to run in the background. In a **new terminal tab**, activate your `venv` and run:
+`python -m glmocr.server`
+
+### 6. Run the Inference Script
+We've set up the script to automatically default to reading `testDocs/dixon51.pdf` and outputting the Markdown results, while forcing it into `selfhosted` mode.
 
 Execute the script:
 ```bash

@@ -16,7 +16,7 @@ def main():
         logging.info(f"Initializing GLM-OCR model (This might take a moment if weights need to be downloaded, or loaded to A100 VRAM)...")
         # By default this will try to use the self-hosted pipeline since we installed glmocr[selfhosted]
         # and it will automatically use CUDA if torch is installed correctly.
-        with GlmOcr() as ocr_parser:
+        with GlmOcr(mode="selfhosted") as ocr_parser:
             logging.info(f"Processing document: {args.document_path}")
             result = ocr_parser.parse(args.document_path)
             
